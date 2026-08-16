@@ -8,6 +8,10 @@ app = FastAPI(title="SubShield")
 
 DB_FILE = "subshield.db"
 
+def get_db_columns(cursor):
+    cursor.execute("PRAGMA table_info(trials)")
+    return [col[1] for col in cursor.fetchall()]
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -21,12 +25,13 @@ def init_db():
             is_strict_no_refund INTEGER DEFAULT 0
         )
     """)
-    cursor.execute("PRAGMA table_info(trials)")
-    columns = [col[1] for col in cursor.fetchall()]
-    if "is_strict_no_refund" not in columns:
+    cols = get_db_columns(cursor)
+    if "is_strict_no_refund" not in cols:
         cursor.execute("ALTER TABLE trials ADD COLUMN is_strict_no_refund INTEGER DEFAULT 0")
-    if "estimated_cost" not in columns:
+    if "estimated_cost" not in cols:
         cursor.execute("ALTER TABLE trials ADD COLUMN estimated_cost REAL DEFAULT 0.0")
+    if "end_date" not in cols:
+        cursor.execute("ALTER TABLE trials ADD COLUMN end_date TEXT DEFAULT ''")
     conn.commit()
     conn.close()
 
@@ -37,7 +42,14 @@ def web_dashboard():
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("SELECT id, user_email, service_name, end_date, estimated_cost, is_strict_no_refund FROM trials")
+        cols = get_db_columns(cursor)
+        
+        select_cols = ["id", "user_email", "service_name"]
+        select_cols.append("end_date" if "end_date" in cols else "end_timestamp")
+        select_cols.append("estimated_cost" if "estimated_cost" in cols else "0.0 AS estimated_cost")
+        select_cols.append("is_strict_no_refund" if "is_strict_no_refund" in cols else "0 AS is_strict_no_refund")
+        
+        cursor.execute(f"SELECT {', '.join(select_cols)} FROM trials")
         trials = cursor.fetchall()
         conn.close()
 
@@ -189,10 +201,23 @@ def add_trial_web(
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO trials (user_email, service_name, end_date, estimated_cost, is_strict_no_refund)
-            VALUES (?, ?, ?, ?, ?)
-        """, (user_email, service_name, end_date_str, cost_float, strict_val))
+        cols = get_db_columns(cursor)
+        
+        insert_fields = ["user_email", "service_name", "estimated_cost", "is_strict_no_refund"]
+        insert_values = [user_email, service_name, cost_float, strict_val]
+        
+        if "end_date" in cols:
+            insert_fields.append("end_date")
+            insert_values.append(end_date_str)
+            
+        if "end_timestamp" in cols:
+            insert_fields.append("end_timestamp")
+            insert_values.append(end_dt.isoformat())
+            
+        placeholders = ", ".join(["?"] * len(insert_fields))
+        field_names = ", ".join(insert_fields)
+        
+        cursor.execute(f"INSERT INTO trials ({field_names}) VALUES ({placeholders})", tuple(insert_values))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -204,7 +229,14 @@ def add_trial_web(
 def view_trial_detail(trial_id: int):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, user_email, service_name, end_date, estimated_cost, is_strict_no_refund FROM trials WHERE id = ?", (trial_id,))
+    cols = get_db_columns(cursor)
+    
+    select_cols = ["id", "user_email", "service_name"]
+    select_cols.append("end_date" if "end_date" in cols else "end_timestamp")
+    select_cols.append("estimated_cost" if "estimated_cost" in cols else "0.0 AS estimated_cost")
+    select_cols.append("is_strict_no_refund" if "is_strict_no_refund" in cols else "0 AS is_strict_no_refund")
+    
+    cursor.execute(f"SELECT {', '.join(select_cols)} FROM trials WHERE id = ?", (trial_id,))
     trial = cursor.fetchone()
     conn.close()
 
