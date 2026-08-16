@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import datetime, timedelta
+from typing import Optional
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -17,9 +18,14 @@ def init_db():
             service_name TEXT NOT NULL,
             end_date TEXT NOT NULL,
             estimated_cost REAL NOT NULL,
-            is_strict_no_refund INTEGER NOT NULL
+            is_strict_no_refund INTEGER NOT NULL DEFAULT 0
         )
     """)
+    # Check and dynamically patch existing database schemas
+    cursor.execute("PRAGMA table_info(trials)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if "is_strict_no_refund" not in columns:
+        cursor.execute("ALTER TABLE trials ADD COLUMN is_strict_no_refund INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     conn.close()
 
@@ -150,20 +156,25 @@ def add_trial_web(
     service_name: str = Form(...),
     user_email: str = Form(...),
     start_date: str = Form(...),
-    trial_days: int = Form(...),
-    estimated_cost: float = Form(...),
-    is_strict: bool = Form(False)
+    trial_days: int = Form(7),
+    estimated_cost: float = Form(0.0),
+    is_strict: Optional[str] = Form(None)
 ):
-    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-    end_dt = start_dt + timedelta(days=trial_days)
+    try:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    except Exception:
+        start_dt = datetime.now()
+
+    end_dt = start_dt + timedelta(days=int(trial_days))
     end_date_str = end_dt.strftime("%Y-%m-%d")
+    strict_val = 1 if is_strict else 0
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO trials (user_email, service_name, end_date, estimated_cost, is_strict_no_refund)
         VALUES (?, ?, ?, ?, ?)
-    """, (user_email, service_name, end_date_str, estimated_cost, 1 if is_strict else 0))
+    """, (user_email, service_name, end_date_str, float(estimated_cost), strict_val))
     conn.commit()
     conn.close()
 
@@ -182,7 +193,7 @@ def view_trial_detail(trial_id: int):
 
     t_id, email, service, end_date, cost, is_strict = trial
     badge = "⚠️ Strict (No Refunds)" if is_strict else "Standard Trial"
-    badge_color = "red" if is_strict else "emerald"
+    badge_bg = "bg-red-500/20 text-red-400" if is_strict else "bg-emerald-500/20 text-emerald-400"
 
     return f"""
     <!DOCTYPE html>
@@ -198,7 +209,7 @@ def view_trial_detail(trial_id: int):
             
             <div class="flex justify-between items-center mb-6">
                 <h1 class="text-3xl font-extrabold text-white">{service}</h1>
-                <span class="bg-{badge_color}-500/20 text-{badge_color}-400 text-xs px-3 py-1 rounded-full font-bold">{badge}</span>
+                <span class="{badge_bg} text-xs px-3 py-1 rounded-full font-bold">{badge}</span>
             </div>
 
             <div class="space-y-4 border-t border-b border-slate-700/60 py-6 mb-6">
